@@ -5,7 +5,8 @@
   "use strict";
 
   const API = "https://www.googleapis.com/calendar/v3";
-  const SCOPES = "https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/calendar.calendarlist.readonly";
+  const TAREAS = "https://tasks.googleapis.com/tasks/v1";
+  const SCOPES = "https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/calendar.calendarlist.readonly https://www.googleapis.com/auth/tasks";
   const cfg = () => (root.CONFIG || {});
   const TZ = () => cfg().ZONA || "Europe/Madrid";
 
@@ -15,6 +16,8 @@
     del(k) { try { root.localStorage.removeItem(k); } catch (e) { /* sin almacenamiento */ } }
   };
 
+  // Si cambian los permisos, se descarta la sesión guardada para pedir los nuevos
+  if (LS.get("ag_scope") !== SCOPES) { LS.del("ag_token"); LS.del("ag_exp"); LS.del("ag_conectado"); LS.set("ag_scope", SCOPES); }
   let token = LS.get("ag_token") || null;
   let expira = Number(LS.get("ag_exp") || 0);
 
@@ -55,10 +58,10 @@
     LS.del("ag_token"); LS.del("ag_exp"); LS.del("ag_conectado");
   }
 
-  async function llamar(ruta, opciones) {
+  async function llamar(ruta, opciones, base) {
     let r;
     try {
-      r = await fetch(API + ruta, Object.assign({}, opciones, {
+      r = await fetch((base || API) + ruta, Object.assign({}, opciones, {
         headers: Object.assign({ Authorization: "Bearer " + token, "Content-Type": "application/json" }, (opciones && opciones.headers) || {})
       }));
     } catch (e) {
@@ -70,7 +73,8 @@
     const msg = (detalle.error && detalle.error.message) || "";
     const motivo = (detalle.error && detalle.error.errors && detalle.error.errors[0] && detalle.error.errors[0].reason) || "";
     if (r.status === 401) { token = null; expira = 0; LS.del("ag_token"); throw error("SESION", "La sesión de Google ha caducado. Vuelve a pulsar el botón."); }
-    if (r.status === 403 && /accessNotConfigured|SERVICE_DISABLED/i.test(motivo + msg)) throw error("API", "La API de Google Calendar no está activada en tu proyecto de Google Cloud.");
+    if (r.status === 403 && /accessNotConfigured|SERVICE_DISABLED/i.test(motivo + msg)) throw error("API", base === TAREAS ? "La API de Google Tasks no está activada en tu proyecto de Google Cloud (Biblioteca → Google Tasks API → Habilitar)." : "La API de Google Calendar no está activada en tu proyecto de Google Cloud.");
+    if (r.status === 403 && /insufficient|scope/i.test(motivo + msg)) { token = null; expira = 0; LS.del("ag_token"); throw error("PERMISO", "Falta el permiso de Tareas. Pulsa «Conectar con Google Calendar» y acepta todos los permisos."); }
     if (r.status === 403) throw error("PERMISO", "Google ha denegado el permiso (" + (msg || motivo) + ").");
     if (r.status === 404) throw error("NOEXISTE", "No se encuentra el calendario o el evento.");
     if (r.status === 409) throw error("DUPLICADO", "Este evento ya estaba guardado.");
@@ -157,7 +161,28 @@
     return d.items || [];
   }
 
+  // ---------- Google Tasks (solo guarda el día, no la hora) ----------
+  const ruta = "/lists/@default/tasks";
+  async function buscarTareaDuplicada(ev) {
+    const d = await llamar(ruta + "?showCompleted=false&maxResults=100", {}, TAREAS);
+    const t = ev.titulo.trim().toLowerCase();
+    return (d.items || []).find((x) => (x.title || "").trim().toLowerCase() === t && x.due && x.due.indexOf(ev.fecha) === 0) || null;
+  }
+  async function crearTarea(ev) {
+    return llamar(ruta, { method: "POST", body: JSON.stringify({ title: ev.titulo, due: ev.fecha + "T00:00:00.000Z" }) }, TAREAS);
+  }
+  async function verificarTarea(id, titulo) {
+    const t = await llamar(ruta + "/" + id, {}, TAREAS);
+    if (!t || t.deleted || (t.title || "") !== titulo) throw error("VERIF", "Google no confirma que la tarea se haya guardado correctamente.");
+    return t;
+  }
+  async function tareasPendientes(max) {
+    const d = await llamar(ruta + "?showCompleted=false&maxResults=" + (max || 20), {}, TAREAS);
+    return (d.items || []).filter((x) => x.title).sort((a, b) => (a.due || "9999").localeCompare(b.due || "9999"));
+  }
+
   const API_PUBLICA = {
+    buscarTareaDuplicada, crearTarea, verificarTarea, tareasPendientes,
     configurado, sesionValida, habiaConectado, asegurarToken, cerrarSesion,
     listarCalendarios, construirEvento, nuevoId, buscarDuplicado, crearEvento, verificar, proximas
   };

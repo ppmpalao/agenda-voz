@@ -117,6 +117,11 @@
           <option value="60">1 hora antes</option><option value="1440">1 día antes</option><option value="900">Día antes 9:00</option>
         </select></div>
     </div>
+    <label for="f-tipo">Guardar como</label>
+    <select id="f-tipo" disabled>
+      <option value="evento">Evento (con hora, aviso y repetición)</option>
+      <option value="tarea">Tarea (solo el día)</option>
+    </select>
     <div class="resumen" id="f-resumen"></div>
     <div id="f-notas"></div>
     <div class="botones">
@@ -133,7 +138,7 @@
     <div class="botones"><button class="btn sec" id="b-volver">Volver</button></div>
   </section>
 
-  <p class="nota">Versión de desarrollo · Fase 5</p>
+  <p class="nota">Versión de desarrollo · Fase 5 + tareas</p>
 </div>
 <div id="aviso" role="status"></div>
 
@@ -162,7 +167,7 @@
   }
 
   function modoEdicion(activo) {
-    ["f-titulo", "f-fecha", "f-hora", "f-duracion", "f-aviso"].forEach((i) => ($(i).disabled = !activo));
+    ["f-titulo", "f-fecha", "f-hora", "f-duracion", "f-aviso", "f-tipo"].forEach((i) => ($(i).disabled = !activo));
     $("b-editar").textContent = activo ? "Listo" : "Editar";
   }
 
@@ -188,8 +193,13 @@
     const [y, m, d] = f.split("-").map(Number);
     const wd = new Date(Date.UTC(y, m - 1, d)).getUTCDay();
     let t = Interprete.largo({ y: y, m: m, d: d, wd: wd });
-    t = t.charAt(0).toUpperCase() + t.slice(1) + (h ? " a las " + h : " (todo el día)");
-    if (estado.recurrenciaTexto) t += " · " + estado.recurrenciaTexto;
+    t = t.charAt(0).toUpperCase() + t.slice(1);
+    if ($("f-tipo").value === "tarea") {
+      t = "Tarea para el " + t.charAt(0).toLowerCase() + t.slice(1) + " (sin hora)";
+    } else {
+      t += h ? " a las " + h : " (todo el día)";
+      if (estado.recurrenciaTexto) t += " · " + estado.recurrenciaTexto;
+    }
     $("f-resumen").textContent = t;
   }
 
@@ -217,6 +227,7 @@
     asegurarOpcion($("f-aviso"), ev.aviso, etqAviso(ev.aviso));
     $("f-duracion").value = String(ev.duracion);
     $("f-aviso").value = String(ev.aviso);
+    $("f-tipo").value = (!ev.hora && !ev.recurrencia) ? "tarea" : "evento";
     idActual = (window.Calendario && Calendario.nuevoId) ? Calendario.nuevoId() : null;
     duplicadoOk = false;
     $("b-guardar").textContent = "Guardar";
@@ -230,7 +241,7 @@
     mostrar("p-confirmar");
   }
 
-  ["f-titulo", "f-fecha", "f-hora"].forEach((i) => $(i).addEventListener("input", actualizarResumen));
+  ["f-titulo", "f-fecha", "f-hora", "f-tipo"].forEach((i) => $(i).addEventListener("input", actualizarResumen));
 
   // Exponer para las siguientes fases (voz, interpretación, Google Calendar)
   window.Agenda = { mostrar, aviso, rellenarConfirmacion, $ };
@@ -270,7 +281,7 @@
 
   function leerFormulario() {
     return { titulo: $("f-titulo").value.trim(), fecha: $("f-fecha").value, hora: $("f-hora").value,
-      duracion: Number($("f-duracion").value), aviso: Number($("f-aviso").value), recurrencia: estado.recurrencia };
+      duracion: Number($("f-duracion").value), aviso: Number($("f-aviso").value), recurrencia: estado.recurrencia, tipo: $("f-tipo").value };
   }
 
   $("b-guardar").onclick = async () => {
@@ -278,23 +289,32 @@
     const ev = leerFormulario();
     if (!ev.titulo) { aviso("Falta el título.", "error"); return; }
     if (!ev.fecha) { aviso("Falta la fecha.", "error"); return; }
+    if (ev.tipo === "tarea" && ev.recurrencia) { aviso("Las tareas no admiten repetición. Elige «Evento» en «Guardar como».", "error"); return; }
     guardando = true;
     $("b-guardar").disabled = true; $("b-guardar").textContent = "Guardando…";
     try {
       await Calendario.asegurarToken();
       if ($("cuenta").hidden) await cargarCalendarios();
+      const esTarea = ev.tipo === "tarea";
       const cal = calElegido();
       if (!duplicadoOk) {
-        const dup = await Calendario.buscarDuplicado(cal, ev);
+        const dup = esTarea ? await Calendario.buscarTareaDuplicada(ev) : await Calendario.buscarDuplicado(cal, ev);
         if (dup) {
           duplicadoOk = true;
-          aviso("Ya existe una cita igual en ese calendario. Pulsa «Guardar igualmente» si quieres crear otra.", "error");
+          aviso(esTarea ? "Ya existe una tarea igual para ese día. Pulsa «Guardar igualmente» si quieres crear otra."
+                        : "Ya existe una cita igual en ese calendario. Pulsa «Guardar igualmente» si quieres crear otra.", "error");
           return;
         }
       }
-      const creado = await Calendario.crearEvento(cal, ev, idActual);
-      await Calendario.verificar(cal, creado.id, ev.titulo);
-      aviso("✔ Guardado en Google Calendar: " + ev.titulo + " · " + $("f-resumen").textContent, "ok");
+      if (esTarea) {
+        const tarea = await Calendario.crearTarea(ev);
+        await Calendario.verificarTarea(tarea.id, ev.titulo);
+        aviso("✔ Guardada en Google Tareas: " + ev.titulo + " · " + $("f-resumen").textContent, "ok");
+      } else {
+        const creado = await Calendario.crearEvento(cal, ev, idActual);
+        await Calendario.verificar(cal, creado.id, ev.titulo);
+        aviso("✔ Guardado en Google Calendar: " + ev.titulo + " · " + $("f-resumen").textContent, "ok");
+      }
       $("transcripcion").textContent = "";
       mostrar("p-principal");
     } catch (e) {
@@ -322,14 +342,22 @@
       await Calendario.asegurarToken();
       if ($("cuenta").hidden) await cargarCalendarios();
       const evs = await Calendario.proximas(calElegido(), 15);
-      if (!evs.length) { vacio("No hay citas próximas en este calendario."); return; }
+      let tareas = [], errTareas = null;
+      try { tareas = await Calendario.tareasPendientes(20); } catch (e) { errTareas = msg(e); }
+      if (!evs.length && !tareas.length && !errTareas) { vacio("No hay citas ni tareas próximas."); return; }
       l.innerHTML = "";
-      evs.forEach((e) => {
+      const tarjeta = (titulo, detalle) => {
         const d = document.createElement("div"); d.className = "evento";
-        const b = document.createElement("b"); b.textContent = e.summary || "(sin título)";
-        const sp = document.createElement("span"); sp.textContent = cuando(e);
+        const b = document.createElement("b"); b.textContent = titulo;
+        const sp = document.createElement("span"); sp.textContent = detalle;
         d.appendChild(b); d.appendChild(sp); l.appendChild(d);
-      });
+      };
+      evs.forEach((e) => tarjeta(e.summary || "(sin título)", cuando(e)));
+      if (tareas.length || errTareas) {
+        const h = document.createElement("h2"); h.textContent = "Tareas pendientes"; l.appendChild(h);
+        if (errTareas) { const p = document.createElement("p"); p.className = "vacio"; p.textContent = errTareas; l.appendChild(p); }
+        tareas.forEach((t) => tarjeta(t.title, t.due ? new Date(t.due).toLocaleDateString("es-ES", { timeZone: "UTC", weekday: "short", day: "numeric", month: "short" }) : "Sin fecha"));
+      }
     } catch (e) { vacio(msg(e)); }
   }
   // ---------- Reconocimiento de voz (Fase 3) ----------

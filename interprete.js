@@ -392,7 +392,7 @@
     if (!fecha && falta.indexOf("fecha") < 0) falta.push("fecha");
 
     if (horaMin !== null && ambigua) dudas.push("Hora asumida: " + hhmm(horaMin) + ". Comprueba si es de la mañana o de la tarde.");
-    if (horaMin === null && fecha) dudas.push("Sin hora concreta: se guardará como evento de todo el día.");
+    if (horaMin === null && fecha) dudas.push(rec ? "Sin hora concreta: como se repite, se guardará como evento de todo el día." : "Sin hora concreta: se propone guardarla como tarea del día (sin hora).");
 
     // 10. Título
     let t = orig;

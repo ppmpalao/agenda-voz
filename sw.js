@@ -1,6 +1,6 @@
 // Service worker mínimo: permite instalar la app y abrirla rápido.
 // Solo guarda los archivos propios; las llamadas a Google siempre van a la red.
-const CACHE = "agenda-voz-v3";
+const CACHE = "agenda-voz-v4";
 const ARCHIVOS = ["./", "./index.html", "./manifest.webmanifest", "./interprete.js", "./calendario.js", "./config.js", "./icon-192.png", "./icon-512.png"];
 
 self.addEventListener("install", (e) => {
