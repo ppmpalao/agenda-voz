@@ -1,0 +1,417 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#1a56db">
+<title>Mi Agenda por Voz</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png">
+<style>
+  :root{
+    --azul:#1a56db; --azul-osc:#1241a8; --fondo:#f4f6fb; --tarjeta:#fff;
+    --texto:#14213d; --suave:#5b6478; --borde:#dfe3ee; --rojo:#c62828; --verde:#1b7f3b;
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{margin:0;height:100%}
+  body{font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;background:var(--fondo);color:var(--texto);
+       padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left)}
+  #app{max-width:520px;margin:0 auto;min-height:100%;display:flex;flex-direction:column}
+  header{display:flex;align-items:center;justify-content:space-between;padding:16px 20px 8px}
+  header h1{font-size:1.25rem;margin:0}
+  .pantalla{display:none;flex:1;flex-direction:column;padding:8px 20px 24px}
+  .pantalla.activa{display:flex}
+
+  /* Principal */
+  #p-principal{align-items:center;justify-content:center;text-align:center;gap:20px}
+  #mic{width:190px;height:190px;border-radius:50%;border:0;background:var(--azul);color:#fff;cursor:pointer;
+       box-shadow:0 10px 30px rgba(26,86,219,.35);display:grid;place-items:center;transition:transform .1s}
+  #mic:active{transform:scale(.96)}
+  #mic.escuchando{background:var(--rojo);box-shadow:0 0 0 14px rgba(198,40,40,.18);animation:pulso 1.2s infinite}
+  @keyframes pulso{50%{box-shadow:0 0 0 26px rgba(198,40,40,.06)}}
+  #mic svg{width:84px;height:84px;fill:#fff}
+  .ayuda{font-size:1.15rem;color:var(--suave);margin:0}
+  #transcripcion{min-height:3.2em;width:100%;background:var(--tarjeta);border:1px solid var(--borde);border-radius:14px;
+       padding:12px 14px;font-size:1.05rem;text-align:left;color:var(--texto)}
+  #transcripcion:empty::before{content:"Aquí aparecerá lo que digas";color:#9aa2b5}
+  .enlace{background:none;border:0;color:var(--azul);font-size:1rem;font-weight:600;padding:10px;cursor:pointer}
+
+  /* Formularios */
+  h2{font-size:1.2rem;margin:8px 0 14px}
+  label{display:block;font-size:.85rem;font-weight:600;color:var(--suave);margin:12px 0 4px}
+  input,select{width:100%;font:inherit;font-size:1.05rem;padding:12px;border:1px solid var(--borde);border-radius:12px;background:#fff;color:var(--texto)}
+  input:disabled,select:disabled{background:#eef0f6;color:var(--texto);opacity:1}
+  .fila{display:flex;gap:12px}.fila>div{flex:1}
+  .botones{display:flex;gap:10px;margin-top:22px}
+  .btn{flex:1;padding:15px 10px;font-size:1.05rem;font-weight:700;border-radius:14px;border:2px solid transparent;cursor:pointer}
+  .btn.primario{background:var(--azul);color:#fff}
+  .btn.primario:disabled{opacity:.5}
+  .btn.sec{background:#fff;color:var(--azul);border-color:var(--azul)}
+  .btn.peligro{background:#fff;color:var(--rojo);border-color:var(--rojo)}
+
+  /* Lista */
+  .evento{background:var(--tarjeta);border:1px solid var(--borde);border-radius:14px;padding:12px 14px;margin-bottom:10px}
+  .evento b{display:block;font-size:1.05rem}
+  .evento span{color:var(--suave);font-size:.92rem}
+  .vacio{color:var(--suave);text-align:center;padding:30px 10px}
+
+  /* Aviso */
+  #aviso{position:fixed;left:50%;bottom:calc(20px + env(safe-area-inset-bottom));transform:translateX(-50%);max-width:92%;
+         background:#222;color:#fff;padding:12px 16px;border-radius:12px;font-size:.95rem;display:none;z-index:10}
+  #aviso.error{background:var(--rojo)} #aviso.ok{background:var(--verde)}
+  .resumen{font-weight:700;color:var(--azul-osc);margin:12px 0 0;min-height:1.3em}
+  .aviso-item{background:#fff7e0;border:1px solid #f0d58a;border-radius:10px;padding:8px 12px;margin-top:8px;font-size:.92rem}
+  .aviso-item.rojo{background:#fdecec;border-color:#f1b3b3}
+  input.falta{border-color:var(--rojo);border-width:2px}
+  .conexion{width:100%;margin-top:6px}
+  .conexion label{text-align:left}
+  .estado-ok{color:var(--verde);font-weight:600;font-size:.9rem;text-align:left;margin:0 0 4px}
+  .nota{font-size:.82rem;color:var(--suave);text-align:center;margin-top:18px}
+</style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <h1>Mi Agenda por Voz</h1>
+    <button class="enlace" id="ir-proximas">Próximas citas</button>
+  </header>
+
+  <!-- 1. PANTALLA PRINCIPAL -->
+  <section class="pantalla activa" id="p-principal">
+    <button id="mic" aria-label="Pulsa para hablar">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 14a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11h-2z"/></svg>
+    </button>
+    <p class="ayuda">Pulsa y dime qué necesitas recordar</p>
+    <div id="transcripcion" aria-live="polite"></div>
+    <div class="conexion">
+      <button class="btn sec" id="b-google" style="width:100%">Conectar con Google Calendar</button>
+      <div id="cuenta" hidden>
+        <p class="estado-ok">✔ Conectado con Google Calendar</p>
+        <label for="f-calendario">Guardar las citas en el calendario</label>
+        <select id="f-calendario"></select>
+      </div>
+    </div>
+  </section>
+
+  <!-- 2. CONFIRMACIÓN -->
+  <section class="pantalla" id="p-confirmar">
+    <h2>Confirma la cita</h2>
+    <label for="f-titulo">Título</label>
+    <input id="f-titulo" type="text" disabled>
+    <div class="fila">
+      <div><label for="f-fecha">Fecha</label><input id="f-fecha" type="date" disabled></div>
+      <div><label for="f-hora">Hora</label><input id="f-hora" type="time" disabled></div>
+    </div>
+    <div class="fila">
+      <div><label for="f-duracion">Duración</label>
+        <select id="f-duracion" disabled>
+          <option value="15">15 minutos</option><option value="30">30 minutos</option>
+          <option value="60">1 hora</option><option value="90">1 hora 30 min</option>
+          <option value="120">2 horas</option><option value="180">3 horas</option>
+          <option value="240">4 horas</option><option value="480">8 horas</option>
+        </select></div>
+      <div><label for="f-aviso">Recordatorio</label>
+        <select id="f-aviso" disabled>
+          <option value="-1">Sin aviso</option><option value="0">A la hora</option>
+          <option value="10">10 min antes</option><option value="30">30 min antes</option>
+          <option value="60">1 hora antes</option><option value="1440">1 día antes</option><option value="900">Día antes 9:00</option>
+        </select></div>
+    </div>
+    <div class="resumen" id="f-resumen"></div>
+    <div id="f-notas"></div>
+    <div class="botones">
+      <button class="btn primario" id="b-guardar">Guardar</button>
+      <button class="btn sec" id="b-editar">Editar</button>
+      <button class="btn peligro" id="b-cancelar">Cancelar</button>
+    </div>
+  </section>
+
+  <!-- 3. PRÓXIMAS CITAS -->
+  <section class="pantalla" id="p-proximas">
+    <h2>Próximas citas</h2>
+    <div id="lista"><p class="vacio">Aún no está conectado con Google Calendar.</p></div>
+    <div class="botones"><button class="btn sec" id="b-volver">Volver</button></div>
+  </section>
+
+  <p class="nota">Versión de desarrollo · Fase 5</p>
+</div>
+<div id="aviso" role="status"></div>
+
+<script src="config.js"></script>
+<script src="https://accounts.google.com/gsi/client" async defer></script>
+<script src="interprete.js"></script>
+<script src="calendario.js"></script>
+<script>
+(function () {
+  const $ = (id) => document.getElementById(id);
+  const pantallas = ["p-principal", "p-confirmar", "p-proximas"];
+
+  function mostrar(id) {
+    pantallas.forEach((p) => $(p).classList.toggle("activa", p === id));
+    window.scrollTo(0, 0);
+  }
+
+  let temporizador;
+  function aviso(texto, tipo) {
+    const a = $("aviso");
+    a.textContent = texto;
+    a.className = tipo || "";
+    a.style.display = "block";
+    clearTimeout(temporizador);
+    temporizador = setTimeout(() => (a.style.display = "none"), 4000);
+  }
+
+  function modoEdicion(activo) {
+    ["f-titulo", "f-fecha", "f-hora", "f-duracion", "f-aviso"].forEach((i) => ($(i).disabled = !activo));
+    $("b-editar").textContent = activo ? "Listo" : "Editar";
+  }
+
+  // ---------- Pantalla de confirmación ----------
+  const estado = { recurrencia: null, recurrenciaTexto: "" };
+
+  function asegurarOpcion(sel, valor, etiqueta) {
+    if (!Array.from(sel.options).some((o) => o.value === String(valor))) {
+      const o = document.createElement("option");
+      o.value = String(valor); o.textContent = etiqueta; sel.appendChild(o);
+    }
+  }
+  const etqAviso = (n) => n % 1440 === 0 ? (n / 1440) + (n === 1440 ? " día" : " días") + " antes"
+    : n % 60 === 0 ? (n / 60) + (n === 60 ? " hora" : " horas") + " antes" : n + " min antes";
+  const etqDur = (n) => n % 60 === 0 ? (n / 60) + (n === 60 ? " hora" : " horas") : n + " minutos";
+
+  function actualizarResumen() {
+    const f = $("f-fecha").value, h = $("f-hora").value;
+    $("f-fecha").classList.toggle("falta", !f && $("f-fecha").dataset.falta === "1");
+    if (f) $("f-fecha").classList.remove("falta");
+    if ($("f-titulo").value) $("f-titulo").classList.remove("falta");
+    if (!f) { $("f-resumen").textContent = ""; return; }
+    const [y, m, d] = f.split("-").map(Number);
+    const wd = new Date(Date.UTC(y, m - 1, d)).getUTCDay();
+    let t = Interprete.largo({ y: y, m: m, d: d, wd: wd });
+    t = t.charAt(0).toUpperCase() + t.slice(1) + (h ? " a las " + h : " (todo el día)");
+    if (estado.recurrenciaTexto) t += " · " + estado.recurrenciaTexto;
+    $("f-resumen").textContent = t;
+  }
+
+  function mostrarNotas(falta, dudas) {
+    const cont = $("f-notas");
+    cont.innerHTML = "";
+    const add = (txt, rojo) => {
+      const div = document.createElement("div");
+      div.className = "aviso-item" + (rojo ? " rojo" : "");
+      div.textContent = txt;
+      cont.appendChild(div);
+    };
+    if (falta.indexOf("fecha") >= 0) add("No he entendido la fecha. Pulsa «Editar» e indícala.", true);
+    if (falta.indexOf("titulo") >= 0) add("No he entendido el título. Pulsa «Editar» y escríbelo.", true);
+    dudas.forEach((d) => add(d, false));
+  }
+
+  // Rellena la pantalla de confirmación con un evento interpretado
+  function rellenarConfirmacion(ev) {
+    const falta = ev.falta || [];
+    $("f-titulo").value = ev.titulo || "";
+    $("f-fecha").value = ev.fecha || "";
+    $("f-hora").value = ev.hora || "";
+    asegurarOpcion($("f-duracion"), ev.duracion, etqDur(ev.duracion));
+    asegurarOpcion($("f-aviso"), ev.aviso, etqAviso(ev.aviso));
+    $("f-duracion").value = String(ev.duracion);
+    $("f-aviso").value = String(ev.aviso);
+    idActual = (window.Calendario && Calendario.nuevoId) ? Calendario.nuevoId() : null;
+    duplicadoOk = false;
+    $("b-guardar").textContent = "Guardar";
+    estado.recurrencia = ev.recurrencia || null;
+    estado.recurrenciaTexto = ev.recurrenciaTexto || "";
+    $("f-fecha").dataset.falta = falta.indexOf("fecha") >= 0 ? "1" : "";
+    $("f-titulo").classList.toggle("falta", falta.indexOf("titulo") >= 0);
+    modoEdicion(falta.length > 0);
+    mostrarNotas(falta, ev.dudas || []);
+    actualizarResumen();
+    mostrar("p-confirmar");
+  }
+
+  ["f-titulo", "f-fecha", "f-hora"].forEach((i) => $(i).addEventListener("input", actualizarResumen));
+
+  // Exponer para las siguientes fases (voz, interpretación, Google Calendar)
+  window.Agenda = { mostrar, aviso, rellenarConfirmacion, $ };
+
+  $("ir-proximas").onclick = () => { mostrar("p-proximas"); cargarProximas(); };
+  $("b-volver").onclick = () => mostrar("p-principal");
+  $("b-cancelar").onclick = () => { $("transcripcion").textContent = ""; mostrar("p-principal"); };
+  $("b-editar").onclick = () => modoEdicion($("f-titulo").disabled);
+  // ---------- Google Calendar (Fase 5) ----------
+  let guardando = false, idActual = null, duplicadoOk = false;
+  const msg = (e) => (e && e.message) || "Ha ocurrido un error inesperado.";
+  const calElegido = () => $("f-calendario").value || "primary";
+
+  function mostrarConexion(conectado) { $("b-google").hidden = conectado; $("cuenta").hidden = !conectado; }
+
+  async function cargarCalendarios() {
+    const cals = await Calendario.listarCalendarios();
+    const sel = $("f-calendario");
+    sel.innerHTML = "";
+    cals.forEach((c) => {
+      const o = document.createElement("option");
+      o.value = c.id; o.textContent = c.nombre + (c.principal ? " (principal)" : "");
+      sel.appendChild(o);
+    });
+    let guardado = null;
+    try { guardado = localStorage.getItem("ag_cal"); } catch (e) { /* sin almacenamiento */ }
+    const principal = cals.find((c) => c.principal);
+    sel.value = cals.some((c) => c.id === guardado) ? guardado : (principal ? principal.id : (cals[0] ? cals[0].id : ""));
+    mostrarConexion(true);
+  }
+  $("f-calendario").onchange = () => { try { localStorage.setItem("ag_cal", $("f-calendario").value); } catch (e) { /* sin almacenamiento */ } };
+
+  $("b-google").onclick = async () => {
+    try { await Calendario.asegurarToken(); await cargarCalendarios(); aviso("Conectado con Google Calendar.", "ok"); }
+    catch (e) { aviso(msg(e), "error"); }
+  };
+
+  function leerFormulario() {
+    return { titulo: $("f-titulo").value.trim(), fecha: $("f-fecha").value, hora: $("f-hora").value,
+      duracion: Number($("f-duracion").value), aviso: Number($("f-aviso").value), recurrencia: estado.recurrencia };
+  }
+
+  $("b-guardar").onclick = async () => {
+    if (guardando) return;
+    const ev = leerFormulario();
+    if (!ev.titulo) { aviso("Falta el título.", "error"); return; }
+    if (!ev.fecha) { aviso("Falta la fecha.", "error"); return; }
+    guardando = true;
+    $("b-guardar").disabled = true; $("b-guardar").textContent = "Guardando…";
+    try {
+      await Calendario.asegurarToken();
+      if ($("cuenta").hidden) await cargarCalendarios();
+      const cal = calElegido();
+      if (!duplicadoOk) {
+        const dup = await Calendario.buscarDuplicado(cal, ev);
+        if (dup) {
+          duplicadoOk = true;
+          aviso("Ya existe una cita igual en ese calendario. Pulsa «Guardar igualmente» si quieres crear otra.", "error");
+          return;
+        }
+      }
+      const creado = await Calendario.crearEvento(cal, ev, idActual);
+      await Calendario.verificar(cal, creado.id, ev.titulo);
+      aviso("✔ Guardado en Google Calendar: " + ev.titulo + " · " + $("f-resumen").textContent, "ok");
+      $("transcripcion").textContent = "";
+      mostrar("p-principal");
+    } catch (e) {
+      aviso(msg(e), "error");
+    } finally {
+      guardando = false;
+      $("b-guardar").disabled = false;
+      $("b-guardar").textContent = duplicadoOk ? "Guardar igualmente" : "Guardar";
+    }
+  };
+
+  // Próximas citas
+  const cuando = (e) => {
+    const f = { timeZone: "Europe/Madrid", weekday: "short", day: "numeric", month: "short" };
+    if (e.start.date) return new Date(e.start.date + "T12:00:00Z").toLocaleDateString("es-ES", Object.assign({}, f, { timeZone: "UTC" })) + " · todo el día";
+    return new Date(e.start.dateTime).toLocaleString("es-ES", Object.assign({}, f, { hour: "2-digit", minute: "2-digit" }));
+  };
+  async function cargarProximas() {
+    const l = $("lista");
+    const vacio = (t) => { l.innerHTML = ""; const p = document.createElement("p"); p.className = "vacio"; p.textContent = t; l.appendChild(p); };
+    if (!Calendario.configurado()) { vacio("Falta configurar el ID de cliente de Google (config.js)."); return; }
+    if (!Calendario.sesionValida() && !Calendario.habiaConectado()) { vacio("Conecta primero con Google Calendar en la pantalla principal."); return; }
+    vacio("Cargando…");
+    try {
+      await Calendario.asegurarToken();
+      if ($("cuenta").hidden) await cargarCalendarios();
+      const evs = await Calendario.proximas(calElegido(), 15);
+      if (!evs.length) { vacio("No hay citas próximas en este calendario."); return; }
+      l.innerHTML = "";
+      evs.forEach((e) => {
+        const d = document.createElement("div"); d.className = "evento";
+        const b = document.createElement("b"); b.textContent = e.summary || "(sin título)";
+        const sp = document.createElement("span"); sp.textContent = cuando(e);
+        d.appendChild(b); d.appendChild(sp); l.appendChild(d);
+      });
+    } catch (e) { vacio(msg(e)); }
+  }
+  // ---------- Reconocimiento de voz (Fase 3) ----------
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  const TEXTO_AYUDA = "Pulsa y dime qué necesitas recordar";
+  let rec = null, escuchando = false, textoFinal = "", huboError = false;
+
+  const ERRORES_VOZ = {
+    "not-allowed": "Permiso de micrófono denegado. En Chrome: candado de la barra de direcciones → Permisos → Micrófono → Permitir.",
+    "service-not-allowed": "El navegador no permite usar el micrófono aquí. Abre la app desde HTTPS en Chrome.",
+    "no-speech": "No he oído nada. Pulsa el micrófono e inténtalo de nuevo.",
+    "audio-capture": "No se detecta ningún micrófono.",
+    "network": "Sin conexión: el reconocimiento de voz de Chrome necesita internet.",
+    "language-not-supported": "El idioma español no está disponible en este dispositivo."
+  };
+
+  function pararVisual() {
+    escuchando = false;
+    $("mic").classList.remove("escuchando");
+    document.querySelector(".ayuda").textContent = TEXTO_AYUDA;
+  }
+
+  // Punto de enganche para la Fase 4: recibe la frase reconocida
+  window.Agenda.alTerminarVoz = function (texto) {
+    rellenarConfirmacion(Interprete.interpretar(texto));
+  };
+
+  function alternarVoz() {
+    if (!SR) {
+      aviso("Este navegador no admite reconocimiento de voz. Usa Chrome en Android.", "error");
+      return;
+    }
+    if (escuchando && rec) { rec.stop(); return; }
+
+    rec = new SR();
+    rec.lang = "es-ES";
+    rec.interimResults = true;
+    rec.continuous = false;
+    rec.maxAlternatives = 1;
+    textoFinal = "";
+    huboError = false;
+
+    rec.onstart = () => {
+      escuchando = true;
+      $("mic").classList.add("escuchando");
+      document.querySelector(".ayuda").textContent = "Te escucho… pulsa de nuevo para terminar";
+      $("transcripcion").textContent = "";
+    };
+    rec.onresult = (e) => {
+      let fin = "", prov = "";
+      for (let i = 0; i < e.results.length; i++) {
+        const r = e.results[i];
+        if (r.isFinal) fin += r[0].transcript; else prov += r[0].transcript;
+      }
+      textoFinal = fin;
+      $("transcripcion").textContent = (fin + " " + prov).trim();
+    };
+    rec.onerror = (e) => {
+      if (e.error === "aborted") return;
+      huboError = true;
+      aviso(ERRORES_VOZ[e.error] || "Error de voz: " + e.error, "error");
+    };
+    rec.onend = () => {
+      pararVisual();
+      const texto = (textoFinal || $("transcripcion").textContent).trim();
+      if (texto) window.Agenda.alTerminarVoz(texto);
+      else if (!huboError) aviso(ERRORES_VOZ["no-speech"], "error");
+    };
+
+    try { rec.start(); }
+    catch (err) { pararVisual(); aviso("No se pudo iniciar el micrófono: " + err.message, "error"); }
+  }
+
+  $("mic").onclick = alternarVoz;
+
+
+  if (Calendario.sesionValida()) cargarCalendarios().catch(() => mostrarConexion(false));
+
+  if ("serviceWorker" in navigator && location.protocol === "https:") {
+    navigator.serviceWorker.register("sw.js").catch(() => {});
+  }
+})();
+</script>
+</body>
+</html>
