@@ -277,7 +277,7 @@
     let guardado = null;
     try { guardado = localStorage.getItem("ag_cal"); } catch (e) { /* sin almacenamiento */ }
     const principal = cals.find((c) => c.principal);
-    if (principal) { Calendario.recordarCuenta(principal.id); $("estado-cuenta").textContent = "✔ Conectado como " + principal.id; }
+    if (principal) { Calendario.recordarCuenta(principal.id); $("estado-cuenta").textContent = "✔ Conectado como " + principal.id + (Calendario.sinRenovacion() ? " · sin reconexión automática (revoca el acceso en myaccount.google.com/permissions y vuelve a conectar)" : ""); }
     sel.value = cals.some((c) => c.id === guardado) ? guardado : (principal ? principal.id : (cals[0] ? cals[0].id : ""));
     mostrarConexion(true);
   }

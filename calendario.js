@@ -28,46 +28,112 @@
   const habiaConectado = () => LS.get("ag_conectado") === "1";
 
   // Debe llamarse directamente desde un toque del usuario (el navegador bloquea ventanas si no).
+  // ---------- Inicio de sesión ----------
+  // Con servidor (WORKER_URL en config.js): se guarda una "llave de renovación" y la app se reconecta sola.
+  // Sin servidor: sesión de 1 hora con el método sencillo de Google (hace falta tocar para reconectar).
+  const urlServidor = () => String(cfg().WORKER_URL || "").replace(/\/$/, "");
+  const gisListo = () => !!(root.google && root.google.accounts && root.google.accounts.oauth2);
+  const sinRenovacion = () => LS.get("ag_sinrefresh") === "1";
+
+  function esperarGIS() {
+    return new Promise((resolve, reject) => {
+      if (gisListo()) { resolve(); return; }
+      let n = 0;
+      const t = setInterval(() => {
+        if (gisListo()) { clearInterval(t); resolve(); }
+        else if (++n > 80) { clearInterval(t); reject(error("GIS", "No se ha podido cargar el inicio de sesión de Google. Comprueba tu conexión a internet.")); }
+      }, 100);
+    });
+  }
+
+  function guardarToken(r) {
+    token = r.access_token;
+    expira = Date.now() + Number(r.expires_in || 3600) * 1000;
+    LS.set("ag_token", token); LS.set("ag_exp", String(expira)); LS.set("ag_conectado", "1");
+  }
+
+  async function pedirServidor(ruta, cuerpo) {
+    let r;
+    try { r = await fetch(urlServidor() + ruta, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(cuerpo) }); }
+    catch (e) { throw error("RED", "Sin conexión con el servidor de la app. Comprueba tu internet."); }
+    let d = {};
+    try { d = await r.json(); } catch (e) { /* sin cuerpo */ }
+    if (!r.ok) throw error(d.error === "invalid_grant" ? "CADUCADA" : "SERVIDOR", d.error_description || d.error || "El servidor de la app ha respondido con un error " + r.status + ".");
+    return d;
+  }
+
+  async function renovar() {
+    try {
+      guardarToken(await pedirServidor("/renovar", { refresh_token: LS.get("ag_refresh") }));
+      return token;
+    } catch (e) {
+      if (e.codigo === "CADUCADA") { LS.del("ag_refresh"); throw error("CADUCADA", "La conexión con Google ha caducado. Pulsa de nuevo para reconectar."); }
+      throw e;
+    }
+  }
+
+  // Ventana de Google (solo desde un toque del usuario). Devuelve un código que el servidor canjea.
+  async function entrarConCodigo(op) {
+    await esperarGIS();
+    return new Promise((resolve, reject) => {
+      const cliente = root.google.accounts.oauth2.initCodeClient({
+        client_id: cfg().CLIENT_ID,
+        scope: SCOPES,
+        ux_mode: "popup",
+        select_account: !!op.cambiarCuenta,
+        hint: op.cambiarCuenta ? undefined : (LS.get("ag_email") || undefined),
+        callback: async (r) => {
+          if (r.error || !r.code) { reject(error("AUTH", "Google no ha autorizado el acceso (" + (r.error || "sin código") + ").")); return; }
+          try {
+            const d = await pedirServidor("/canjear", { code: r.code });
+            guardarToken(d);
+            if (d.refresh_token) { LS.set("ag_refresh", d.refresh_token); LS.del("ag_sinrefresh"); }
+            else { LS.del("ag_refresh"); LS.set("ag_sinrefresh", "1"); }
+            resolve(token);
+          } catch (e) { reject(e); }
+        },
+        error_callback: (e) => reject(error("AUTH", e && e.type === "popup_closed" ? "Has cerrado la ventana de Google antes de terminar." : "No se pudo iniciar sesión con Google."))
+      });
+      cliente.requestCode();
+    });
+  }
+
   // op.silencioso: intenta renovar sin ventanas (al abrir la app). op.cambiarCuenta: muestra el selector de cuentas.
+  // Debe llamarse directamente desde un toque del usuario cuando haga falta la ventana de Google.
   function asegurarToken(op) {
     op = op || {};
     if (!configurado()) return Promise.reject(error("CONFIG", "Falta configurar el ID de cliente de Google (archivo config.js)."));
     if (!op.cambiarCuenta && sesionValida()) return Promise.resolve(token);
-    const gisListo = () => !!(root.google && root.google.accounts && root.google.accounts.oauth2);
-    return new Promise((resolve, reject) => {
-      // El script de Google carga en segundo plano: si aún no está, se espera hasta 8 segundos
-      if (!gisListo()) {
-        let n = 0;
-        const t = setInterval(() => {
-          if (gisListo()) { clearInterval(t); lanzar(); }
-          else if (++n > 80) { clearInterval(t); reject(error("GIS", "No se ha podido cargar el inicio de sesión de Google. Comprueba tu conexión a internet.")); }
-        }, 100);
-        return;
-      }
-      lanzar();
-      function lanzar() {
-      const g = root.google;
-      const cliente = g.accounts.oauth2.initTokenClient({
+
+    if (urlServidor()) {
+      if (!op.cambiarCuenta && LS.get("ag_refresh")) return renovar();
+      if (op.silencioso) return Promise.reject(error("INTERACCION", "Hace falta un toque para reconectar."));
+      return entrarConCodigo(op);
+    }
+
+    const lanzar = (resolve, reject) => {
+      const cliente = root.google.accounts.oauth2.initTokenClient({
         client_id: cfg().CLIENT_ID,
         scope: SCOPES,
         hint: op.cambiarCuenta ? undefined : (LS.get("ag_email") || undefined),
         callback: (r) => {
           if (r.error) { reject(error("AUTH", "Google no ha autorizado el acceso (" + r.error + ").")); return; }
-          token = r.access_token;
-          expira = Date.now() + Number(r.expires_in || 3600) * 1000;
-          LS.set("ag_token", token); LS.set("ag_exp", String(expira)); LS.set("ag_conectado", "1");
+          guardarToken(r);
           resolve(token);
         },
         error_callback: (e) => reject(error("AUTH", e && e.type === "popup_closed" ? "Has cerrado la ventana de Google antes de terminar." : "No se pudo iniciar sesión con Google."))
       });
       cliente.requestAccessToken({ prompt: op.cambiarCuenta ? "select_account" : (op.silencioso ? "none" : "") });
-      }
+    };
+    return new Promise((resolve, reject) => {
+      if (gisListo()) { lanzar(resolve, reject); return; }
+      esperarGIS().then(() => lanzar(resolve, reject), reject);
     });
   }
 
   function cerrarSesion() {
     token = null; expira = 0;
-    LS.del("ag_token"); LS.del("ag_exp"); LS.del("ag_conectado");
+    LS.del("ag_token"); LS.del("ag_exp"); LS.del("ag_conectado"); LS.del("ag_refresh");
   }
 
   async function llamar(ruta, opciones, base) {
@@ -197,7 +263,7 @@
   const cuentaGuardada = () => LS.get("ag_email");
 
   const API_PUBLICA = {
-    recordarCuenta, cuentaGuardada,
+    recordarCuenta, cuentaGuardada, sinRenovacion,
     buscarTareaDuplicada, crearTarea, verificarTarea, tareasPendientes,
     configurado, sesionValida, habiaConectado, asegurarToken, cerrarSesion,
     listarCalendarios, construirEvento, nuevoId, buscarDuplicado, crearEvento, verificar, proximas
