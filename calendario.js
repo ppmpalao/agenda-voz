@@ -28,18 +28,29 @@
   const habiaConectado = () => LS.get("ag_conectado") === "1";
 
   // Debe llamarse directamente desde un toque del usuario (el navegador bloquea ventanas si no).
-  function asegurarToken() {
+  // op.silencioso: intenta renovar sin ventanas (al abrir la app). op.cambiarCuenta: muestra el selector de cuentas.
+  function asegurarToken(op) {
+    op = op || {};
     if (!configurado()) return Promise.reject(error("CONFIG", "Falta configurar el ID de cliente de Google (archivo config.js)."));
-    if (sesionValida()) return Promise.resolve(token);
+    if (!op.cambiarCuenta && sesionValida()) return Promise.resolve(token);
+    const gisListo = () => !!(root.google && root.google.accounts && root.google.accounts.oauth2);
     return new Promise((resolve, reject) => {
-      const g = root.google;
-      if (!g || !g.accounts || !g.accounts.oauth2) {
-        reject(error("GIS", "No se ha podido cargar el inicio de sesión de Google. Comprueba tu conexión a internet."));
+      // El script de Google carga en segundo plano: si aún no está, se espera hasta 8 segundos
+      if (!gisListo()) {
+        let n = 0;
+        const t = setInterval(() => {
+          if (gisListo()) { clearInterval(t); lanzar(); }
+          else if (++n > 80) { clearInterval(t); reject(error("GIS", "No se ha podido cargar el inicio de sesión de Google. Comprueba tu conexión a internet.")); }
+        }, 100);
         return;
       }
+      lanzar();
+      function lanzar() {
+      const g = root.google;
       const cliente = g.accounts.oauth2.initTokenClient({
         client_id: cfg().CLIENT_ID,
         scope: SCOPES,
+        hint: op.cambiarCuenta ? undefined : (LS.get("ag_email") || undefined),
         callback: (r) => {
           if (r.error) { reject(error("AUTH", "Google no ha autorizado el acceso (" + r.error + ").")); return; }
           token = r.access_token;
@@ -49,7 +60,8 @@
         },
         error_callback: (e) => reject(error("AUTH", e && e.type === "popup_closed" ? "Has cerrado la ventana de Google antes de terminar." : "No se pudo iniciar sesión con Google."))
       });
-      cliente.requestAccessToken({ prompt: "" });
+      cliente.requestAccessToken({ prompt: op.cambiarCuenta ? "select_account" : (op.silencioso ? "none" : "") });
+      }
     });
   }
 
@@ -181,7 +193,11 @@
     return (d.items || []).filter((x) => x.title).sort((a, b) => (a.due || "9999").localeCompare(b.due || "9999"));
   }
 
+  const recordarCuenta = (email) => LS.set("ag_email", email);
+  const cuentaGuardada = () => LS.get("ag_email");
+
   const API_PUBLICA = {
+    recordarCuenta, cuentaGuardada,
     buscarTareaDuplicada, crearTarea, verificarTarea, tareasPendientes,
     configurado, sesionValida, habiaConectado, asegurarToken, cerrarSesion,
     listarCalendarios, construirEvento, nuevoId, buscarDuplicado, crearEvento, verificar, proximas

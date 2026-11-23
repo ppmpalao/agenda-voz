@@ -86,9 +86,10 @@
     <div class="conexion">
       <button class="btn sec" id="b-google" style="width:100%">Conectar con Google Calendar</button>
       <div id="cuenta" hidden>
-        <p class="estado-ok">✔ Conectado con Google Calendar</p>
+        <p class="estado-ok" id="estado-cuenta">✔ Conectado con Google Calendar</p>
         <label for="f-calendario">Guardar las citas en el calendario</label>
         <select id="f-calendario"></select>
+        <button class="enlace" id="b-cambiar">Cambiar de cuenta de Google</button>
       </div>
     </div>
   </section>
@@ -255,7 +256,14 @@
   const msg = (e) => (e && e.message) || "Ha ocurrido un error inesperado.";
   const calElegido = () => $("f-calendario").value || "primary";
 
-  function mostrarConexion(conectado) { $("b-google").hidden = conectado; $("cuenta").hidden = !conectado; }
+  function etiquetaConectar() {
+    const c = Calendario.cuentaGuardada();
+    $("b-google").textContent = c ? "Reconectar como " + c : "Conectar con Google Calendar";
+  }
+  function mostrarConexion(conectado) {
+    $("b-google").hidden = conectado; $("cuenta").hidden = !conectado;
+    if (!conectado) etiquetaConectar();
+  }
 
   async function cargarCalendarios() {
     const cals = await Calendario.listarCalendarios();
@@ -269,6 +277,7 @@
     let guardado = null;
     try { guardado = localStorage.getItem("ag_cal"); } catch (e) { /* sin almacenamiento */ }
     const principal = cals.find((c) => c.principal);
+    if (principal) { Calendario.recordarCuenta(principal.id); $("estado-cuenta").textContent = "✔ Conectado como " + principal.id; }
     sel.value = cals.some((c) => c.id === guardado) ? guardado : (principal ? principal.id : (cals[0] ? cals[0].id : ""));
     mostrarConexion(true);
   }
@@ -277,6 +286,15 @@
   $("b-google").onclick = async () => {
     try { await Calendario.asegurarToken(); await cargarCalendarios(); aviso("Conectado con Google Calendar.", "ok"); }
     catch (e) { aviso(msg(e), "error"); }
+  };
+
+  $("b-cambiar").onclick = async () => {
+    try {
+      await Calendario.asegurarToken({ cambiarCuenta: true });
+      try { localStorage.removeItem("ag_cal"); } catch (e) { /* sin almacenamiento */ }
+      await cargarCalendarios();
+      aviso("Cuenta cambiada.", "ok");
+    } catch (e) { aviso(msg(e), "error"); }
   };
 
   function leerFormulario() {
@@ -434,7 +452,12 @@
   $("mic").onclick = alternarVoz;
 
 
+  etiquetaConectar();
   if (Calendario.sesionValida()) cargarCalendarios().catch(() => mostrarConexion(false));
+  else if (Calendario.habiaConectado()) {
+    $("b-google").textContent = "Reconectando…";
+    Calendario.asegurarToken({ silencioso: true }).then(cargarCalendarios).catch(() => mostrarConexion(false));
+  }
 
   if ("serviceWorker" in navigator && location.protocol === "https:") {
     navigator.serviceWorker.register("sw.js").catch(() => {});
